@@ -22,6 +22,8 @@
 (defvar org-roam-feed-node-scores (make-hash-table :test 'equal)
   "Hash table storing computed scores for nodes.")
 
+(defvar org-roam-feed-public-index (org-roam-node-from-id "540d97ff-8185-43a5-a046-2a35eae90282"))
+
 (defun org-roam-feed-get-backlinks-properties (node)
   "Get the alist of properties for each node that links to NODE."
   (mapcar #'car (org-roam-db-query
@@ -211,10 +213,39 @@ visit an org-roam node and look for a property. Org-roam thinks of property valu
       (dolist (node (org-roam-feed-get-page-nodes org-roam-feed-current-page))
         (org-roam-feed-insert-node node)))))
 
+(defun org-roam-feed-update-public-index ()
+  """Create a list of org-mode links corresponding to the first page of feed results, and insert it into a dedicated heading in a roam node.
+
+TODO:
+- remove hardcoded heading title.
+- replace org-map-entries with an org-element or org-ml based operation.
+- construct the list of links with org-element instead of string formatting."""
+  (let ((link-block (mapconcat (lambda (node)
+				 (let ((link (concat "id:" (org-roam-node-id node)))
+				       (title (org-roam-node-title node)))
+				   (format "- [[%s][%s]]\n" link title)))
+			       (org-roam-feed-get-page-nodes 0)))
+	(review-heading (concat "* To Review\n" link-block)))
+    ;; This works by killing and replacing a heading in a roam node with links corresponding to the first page.
+    (save-excursion
+      (org-roam-node-visit org-roam-feed-public-index)
+      (org-map-entries (lambda ()
+			 (progn
+			   (if (string= (nth 4 (org-heading-components)) "To Review")
+			       (save-restriction
+				 (org-mark-subtree)
+				 (setq org-map-continue-from (region-beginning))
+				 (delete-region (region-beginning) (region-end))))
+			   (point-max-marker)
+			   (insert review-heading)
+			   (save-buffer)))
+		       t 'file))))
+
+
 (defun org-roam-feed-insert-node (node)
   "Insert NODE into the feed buffer with magit-section formatting."
-  (let* ((score (or (org-roam-feed-get-property-from-node node "FEED_SCORE") 0.5))
-         (history (org-roam-feed-get-property-from-node node "MTIME")))
+  (let* ((score (string-to-number (or (org-roam-feed-get-property-from-node node "FEED_SCORE") "0.5")))
+         (history (split-string-and-unquote (or (org-roam-feed-get-property-from-node node "MTIME") "") ",")))
     (magit-insert-section section (org-roam-node-section)
       (magit-insert-heading
         (format "%s (Score: %.2f, Reviews: %d)"
