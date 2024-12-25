@@ -92,7 +92,7 @@ visit an org-roam node and look for a property. Org-roam thinks of property valu
   "Update scores for all nodes in the network."
   (let ((nodes (org-roam-node-list)))
     (dolist (node nodes)
-      (org-roam-feed-set-property node "FEED_SCORE" (org-roam-feed-calculate-node-score  node)))))
+      (org-roam-feed-set-property node "FEED_SCORE" (org-roam-feed-calculate-node-score node)))))
 
 (defun org-roam-feed-get-property-from-node (node property)
   (alist-get property (org-roam-node-properties node)))
@@ -114,7 +114,7 @@ visit an org-roam node and look for a property. Org-roam thinks of property valu
   "Record a review for NODE and propagate effects through the network."
   ;; add the review time to the MTIME property in the node.
   (message "%s %s" node (type-of node))
-  (org-roam-feed-insert-property node "MTIME" (ts-now))
+  (org-roam-feed-insert-property node "MTIME" (format-time-string (org-time-stamp-format t t) (current-time)))
   ;; Update scores to reflect the new review and update the FEED_SCORE properties for all nodes.
   ;; TODO move this to feed refresh.
   (org-roam-feed-update-scores))
@@ -245,16 +245,17 @@ visit an org-roam node and look for a property. Org-roam thinks of property valu
       (insert "\n"))
     ))
 
+(defun org-roam-feed-record-review-interactive ()
+  (interactive)
+  (when-let ((node (org-roam-node-at-point)))
+    (org-roam-feed-record-review node)
+    (org-roam-feed-refresh)))
+
 (defvar org-roam-feed-mode-map
   (let ((map (make-sparse-keymap)))
     (define-key map (kbd "g") 'org-roam-feed-refresh)
     (define-key map (kbd "RET") 'org-roam-node-visit)
-    (define-key map (kbd "r")
-                (lambda ()
-                  (interactive)
-                  (when-let ((node (org-roam-node-at-point)))
-                    (org-roam-feed-record-review node)
-                    (org-roam-feed-refresh))))
+    (define-key map (kbd "r") 'org-roam-feed-record-review-interactive)
     (define-key map (kbd "n") 'org-roam-feed-next-page)
     (define-key map (kbd "p") 'org-roam-feed-prev-page)
     map)
