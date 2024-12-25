@@ -22,30 +22,35 @@
 (defvar org-roam-feed-node-scores (make-hash-table :test 'equal)
   "Hash table storing computed scores for nodes.")
 
-(defun org-roam-feed-get-backlinks (node-id)
-  "Get all nodes that link to NODE-ID."
+(defun org-roam-feed-get-backlinks-properties (node)
+  "Get the alist of properties for each node that links to NODE."
   (mapcar #'car (org-roam-db-query
-                 [:select [source]
-                  :from links
-                  :where (= dest $s1)
-                  :and (= type "id")]
-                 node-id)))
+                 [:select [nodes:properties]
+			  :from links
+			  :join nodes
+			  :on (= links:source nodes:id)
+			  :where (= dest $s1)
+			  :and (= type "id")
+			  ]
+                 (org-roam-node-id node))))
 
-(defun org-roam-feed-get-outlinks (node-id)
-  "Get all nodes that NODE-ID links to."
+(defun org-roam-feed-get-outlinks-properties (node)
+  "Get all nodes that NODE links to."
   (mapcar #'car (org-roam-db-query
-                 [:select [dest]
-                  :from links
-                  :where (= source $s1)
-                  :and (= type "id")]
-                 node-id)))
+                 [:select [nodes:properties]
+			  :from links
+			  :join nodes
+			  :on (= links:dest nodes:id)
+			  :where (= source $s1)
+			  :and (= type "id")]
+                 (org-roam-node-id node))))
 
-(defun org-roam-feed-calculate-node-score (node-id)
+(defun org-roam-feed-calculate-node-score (node)
   "Calculate a score for NODE-ID based on its links and review history."
-  (let* ((backlinks (org-roam-feed-get-backlinks node-id))
+  (let* ((backlinks-properties (org-roam-feed-get-backlinks-properties node))
          (backlink-scores 
-          (mapcar (lambda (link-id)
-                    (let* ((history (gethash link-id org-roam-feed-review-history))
+          (mapcar (lambda (properties)
+                    (let* ((history (alist-get "MTIME" properties))
                            (last-review (car history))
                            (review-count (length history)))
                       ;; Score based on recency and frequency of backlink reviews
@@ -53,45 +58,66 @@
                           (* (/ 1.0 (+ 1.0 (ts-difference (ts-now) last-review)))
                              (log (+ 1.0 review-count)))
                         0.0)))
-                  backlinks))
+                  backlinks-properties))
          (base-score (if backlink-scores
                         (/ (apply #'+ backlink-scores) 
                            (float (length backlink-scores)))
                       0.0)))
-    ;; Apply damping factor and store
-    (puthash node-id
-             (+ (* org-roam-feed-damping-factor base-score)
-                (* (- 1 org-roam-feed-damping-factor)
-                   (if (gethash node-id org-roam-feed-review-history) 1.0 0.5)))
-             org-roam-feed-node-scores)))
+    ;; Apply damping factor and return value
+    (+ (* org-roam-feed-damping-factor base-score)
+       (* (- 1 org-roam-feed-damping-factor)
+          (if (alist-get "MTIME"  (org-roam-node-properties node)) 1.0 0.5)))))
+
+
+(defun org-roam-feed-set-property (node property value)
+  "Visit an org-roam node and set a property to a value."
+  (save-excursion
+    (org-roam-node-visit node)
+					;org-roam wants properties to be sets. We use org-mode's org-set-property to avoid this behaviour.
+					; TODO attempt to restore honor to this floating point - see what it takes to make the conversion lossless.
+    (org-set-property property (number-to-string value))
+    (org-mark-ring-goto)))
+
+(defun org-roam-feed-insert-property (node property value)
+  """Add a value to the set of values in an org-roam node's property.
+
+visit an org-roam node and look for a property. Org-roam thinks of property values as sets by default. If the property exists, check for the argument value in the property's value set. If it is already present, do nothing. If it isn't, add it to the beginning. If the property iteslf deosn't exist, create it and set its value to the argument value.
+"""
+  (save-excursion
+    (org-roam-node-visit node)
+    (org-roam-property-add property value)
+    (org-mark-ring-goto)))
 
 (defun org-roam-feed-update-scores ()
   "Update scores for all nodes in the network."
   (let ((nodes (org-roam-node-list)))
     (dolist (node nodes)
-      (org-roam-feed-calculate-node-score (org-roam-node-id node)))))
+      (org-roam-feed-set-property node "FEED_SCORE" (org-roam-feed-calculate-node-score  node)))))
 
-(defun org-roam-feed-calculate-next-review (node-id)
-  "Calculate when NODE-ID should next be reviewed using PageRank and SRS."
-  (let* ((history (gethash node-id org-roam-feed-review-history))
+(defun org-roam-feed-get-property-from-node (node property)
+  (alist-get property (org-roam-node-properties node)))
+
+(defun org-roam-feed-calculate-next-review (node)
+  "Calculate when NODE should next be reviewed using PageRank and SRS."
+  (let* ((history (org-roam-feed-get-property-from-node node "MTIME"))
          (review-count (length history))
          (base-interval (* org-roam-feed-default-interval
                           (if (= review-count 0) 1
                             (expt 2 (1- review-count)))))
-         (score (or (gethash node-id org-roam-feed-node-scores) 0.5))
+         (score (or (org-roam-feed-get-property-from-node node "FEED_SCORE") 0.5))
          ;; Adjust interval based on score - higher scores mean shorter intervals
          (adjusted-interval (round (* base-interval (/ 1.0 (+ 0.5 score))))))
     (ts-adjust 'day adjusted-interval (ts-now))))
 
-(defun org-roam-feed-record-review (node-id)
-  "Record a review for NODE-ID and propagate effects through the network."
-  (let ((history (or (gethash node-id org-roam-feed-review-history)
-                     (list))))
-    (puthash node-id
-             (cons (ts-now) history)
-             org-roam-feed-review-history)
-    ;; Update scores to reflect the new review
-    (org-roam-feed-update-scores)))
+
+(defun org-roam-feed-record-review (node)
+  "Record a review for NODE and propagate effects through the network."
+  ;; add the review time to the MTIME property in the node.
+  (message "%s %s" node (type-of node))
+  (org-roam-feed-insert-property node "MTIME" (ts-now))
+  ;; Update scores to reflect the new review and update the FEED_SCORE properties for all nodes.
+  ;; TODO move this to feed refresh.
+  (org-roam-feed-update-scores))
 
 (require 'org-roam)
 (require 'magit-section)
@@ -113,9 +139,8 @@
   (let* ((nodes (org-roam-node-list))
          (nodes-with-schedule
           (mapcar (lambda (node)
-                    (let* ((node-id (org-roam-node-id node))
-                           (next-review (org-roam-feed-calculate-next-review node-id))
-                           (score (or (gethash node-id org-roam-feed-node-scores) 0.5)))
+                    (let* ((next-review (org-roam-feed-calculate-next-review node))
+                           (score (or (org-roam-feed-get-property-from-node node "FEED_SCORE") 0.5)))
                       (cons node (cons next-review score))))
                   nodes)))
     ;; Sort by a combination of review time and score
@@ -133,13 +158,12 @@
 
 (defun org-roam-feed-get-page-nodes (page)
   "Get nodes for the specified PAGE number."
-  (org-roam-feed-update-scores)
+  ;; (org-roam-feed-update-scores)
   (let* ((nodes (org-roam-node-list))
          (nodes-with-schedule
           (mapcar (lambda (node)
-                    (let* ((node-id (org-roam-node-id node))
-                           (next-review (org-roam-feed-calculate-next-review node-id))
-                           (score (or (gethash node-id org-roam-feed-node-scores) 0.5)))
+                    (let* ((next-review (org-roam-feed-calculate-next-review node))
+                           (score (or (org-roam-feed-get-property-from-node node "FEED_SCORE") 0.5)))
                       (cons node (cons next-review score))))
                   nodes))
          (sorted-nodes
@@ -193,26 +217,31 @@
 
 (defun org-roam-feed-insert-node (node)
   "Insert NODE into the feed buffer with magit-section formatting."
-  (let* ((node-id (org-roam-node-id node))
-         (score (or (gethash node-id org-roam-feed-node-scores) 0.5))
-         (history (gethash node-id org-roam-feed-review-history)))
-    (magit-insert-section org-roam-node
+  (let* ((score (or (org-roam-feed-get-property-from-node node "FEED_SCORE") 0.5))
+         (history (org-roam-feed-get-property-from-node node "MTIME")))
+    (magit-insert-section section (org-roam-node-section)
       (magit-insert-heading
         (format "%s (Score: %.2f, Reviews: %d)"
                 (org-roam-node-title node)
                 score
                 (length history)))
+      (oset section node node)
       (when history
         (insert (format "Last reviewed: %s\n"
                        (ts-format (car history)))))
-      (let ((backlinks (org-roam-feed-get-backlinks node-id))
-            (outlinks (org-roam-feed-get-outlinks node-id)))
+      (let ((backlinks (org-roam-feed-get-backlinks-properties node))
+            (outlinks (org-roam-feed-get-outlinks-properties node)))
         (insert (format "Backlinks: %d, Outlinks: %d\n"
-                       (length backlinks)
-                       (length outlinks))))
-      (org-roam-node-insert-section :source-node node
-				    :point (org-roam-node-point node)
-				    :properties (org-roam-node-properties node))
+			(length backlinks)
+			(length outlinks))))
+      (let ((point (org-roam-node-point node)))
+	(magit-insert-section section (org-roam-preview-section)
+	  (insert (org-roam-fontify-like-in-org-mode
+		   (org-roam-preview-get-contents (org-roam-node-file node) point))
+		  "\n")
+	  (oset section file (org-roam-node-file node))
+	  (oset section point point)
+	  (insert ?\n)))
       (insert "\n"))
     ))
 
@@ -224,8 +253,7 @@
                 (lambda ()
                   (interactive)
                   (when-let ((node (org-roam-node-at-point)))
-                    (org-roam-feed-record-review
-                     (org-roam-node-id node))
+                    (org-roam-feed-record-review node)
                     (org-roam-feed-refresh))))
     (define-key map (kbd "n") 'org-roam-feed-next-page)
     (define-key map (kbd "p") 'org-roam-feed-prev-page)
