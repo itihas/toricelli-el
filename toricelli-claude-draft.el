@@ -46,27 +46,27 @@
                  (org-roam-node-id node))))
 
 (defun org-roam-feed-calculate-node-score (node)
-  "Calculate a score for NODE-ID based on its links and review history."
-  (let* ((backlinks-properties (org-roam-feed-get-backlinks-properties node))
-         (backlink-scores 
-          (mapcar (lambda (properties)
-                    (let* ((history (alist-get "MTIME" properties))
-                           (last-review (car history))
-                           (review-count (length history)))
-                      ;; Score based on recency and frequency of backlink reviews
-                      (if last-review
-                          (* (/ 1.0 (+ 1.0 (ts-difference (ts-now) last-review)))
-                             (log (+ 1.0 review-count)))
-                        0.0)))
-                  backlinks-properties))
-         (base-score (if backlink-scores
-                        (/ (apply #'+ backlink-scores) 
-                           (float (length backlink-scores)))
-                      0.0)))
+  "Calculate a score for NODE-ID on its links and review history."
+  (let* ((frecency (lambda (property-alist)
+               (let* ((history (split-string-and-unquote (or (alist-get "MTIME" property-alist) "") ","))
+		      (last-review (car history))
+                      (review-count (length history)))
+                 ;; Score based on recency and frequency of backlink reviews
+                 (if last-review
+                     (* (/ 1.0 (+ 1.0 (/ (float-time (time-since last-review)) 86400)))
+                        (log (+ 1.0 review-count)))
+                   0.0))))
+	 (base-score (funcall frecency (org-roam-node-properties node)))
+         (backlinks-properties (org-roam-feed-get-backlinks-properties node))
+	 (backlink-scores
+          (mapcar (lambda (n) (string-to-number (or (alist-get "FEED_SCORE" n nil nil 'string-equal) "0"))) backlinks-properties))
+         (avg-backlink-score (if backlink-scores
+				  (/ (apply #'+ backlink-scores) 
+				     (float (length backlink-scores)))
+				0.0)))
     ;; Apply damping factor and return value
-    (+ (* org-roam-feed-damping-factor base-score)
-       (* (- 1 org-roam-feed-damping-factor)
-          (if (alist-get "MTIME"  (org-roam-node-properties node)) 1.0 0.5)))))
+    (+ (* (- 1 org-roam-feed-damping-factor) base-score)
+       (* org-roam-feed-damping-factor avg-backlink-score))))
 
 
 (defun org-roam-feed-set-property (node property value)
@@ -76,6 +76,7 @@
 					;org-roam wants properties to be sets. We use org-mode's org-set-property to avoid this behaviour.
 					; TODO attempt to restore honor to this floating point - see what it takes to make the conversion lossless.
     (org-set-property property (number-to-string value))
+    (save-buffer)
     (org-mark-ring-goto)))
 
 (defun org-roam-feed-insert-property (node property value)
@@ -83,28 +84,30 @@
 
 visit an org-roam node and look for a property. Org-roam thinks of property values as sets by default. If the property exists, check for the argument value in the property's value set. If it is already present, do nothing. If it isn't, add it to the beginning. If the property iteslf deosn't exist, create it and set its value to the argument value.
 """
-  (save-excursion
-    (org-roam-node-visit node)
-    (org-roam-property-add property value)
-    (org-mark-ring-goto)))
+(save-excursion
+  (org-roam-node-visit node)
+  (let ((mtimes (split-string-and-unquote (or (alist-get "MTIME" (org-roam-node-properties node) nil nil 'string-equal) "") ",")))
+    (org-roam-)
+    (org-set-property property (combine-and-quote-strings (cons value mtimes) ",")))
+  (org-mark-ring-goto)))
 
 (defun org-roam-feed-update-scores ()
   "Update scores for all nodes in the network."
   (let ((nodes (org-roam-node-list)))
     (dolist (node nodes)
-      (org-roam-feed-set-property node "FEED_SCORE" (org-roam-feed-calculate-node-score node)))))
+    (org-roam-feed-set-property node "FEED_SCORE" (org-roam-feed-calculate-node-score node)))))
 
 (defun org-roam-feed-get-property-from-node (node property)
-  (alist-get property (org-roam-node-properties node)))
+  (alist-get property (org-roam-node-properties node) nil nil 'string-equal))
 
 (defun org-roam-feed-calculate-next-review (node)
   "Calculate when NODE should next be reviewed using PageRank and SRS."
-  (let* ((history (org-roam-feed-get-property-from-node node "MTIME"))
+  (let* ((history (split-string-and-unquote (or (org-roam-feed-get-property-from-node node "MTIME") "") ","))
          (review-count (length history))
          (base-interval (* org-roam-feed-default-interval
                           (if (= review-count 0) 1
                             (expt 2 (1- review-count)))))
-         (score (or (org-roam-feed-get-property-from-node node "FEED_SCORE") 0.5))
+         (score (string-to-number (or (org-roam-feed-get-property-from-node node "FEED_SCORE") "0.5")))
          ;; Adjust interval based on score - higher scores mean shorter intervals
          (adjusted-interval (round (* base-interval (/ 1.0 (+ 0.5 score))))))
     (ts-adjust 'day adjusted-interval (ts-now))))
@@ -163,19 +166,12 @@ visit an org-roam node and look for a property. Org-roam thinks of property valu
          (nodes-with-schedule
           (mapcar (lambda (node)
                     (let* ((next-review (org-roam-feed-calculate-next-review node))
-                           (score (or (org-roam-feed-get-property-from-node node "FEED_SCORE") 0.5)))
+                           (score (string-to-number (or (org-roam-feed-get-property-from-node node "FEED_SCORE") "0.5"))))
                       (cons node (cons next-review score))))
                   nodes))
          (sorted-nodes
           (mapcar #'car
-                  (sort nodes-with-schedule
-                        (lambda (a b)
-                          (let ((time-a (cadr a))
-                                (score-a (cddr a))
-                                (time-b (cadr b))
-                                (score-b (cddr b)))
-                            (ts< (ts-adjust 'day (round (/ -7.0 score-a)) time-a)
-                                 (ts-adjust 'day (round (/ -7.0 score-b)) time-b)))))))
+                  (-sort (lambda (a b) (> (cddr a) (cddr b))) nodes-with-schedule)))
          (start (* page org-roam-feed-page-size))
          (end (min (+ start org-roam-feed-page-size) (length sorted-nodes))))
     (seq-subseq sorted-nodes start end)))
