@@ -16,13 +16,23 @@
   :type 'float
   :group 'org-roam-feed)
 
+(defcustom org-roam-feed-index nil
+  "ID of the roam node within which to build an index."
+  :type 'string
+  :group 'org-roam-feed)
+
+(defcustom org-roam-feed-index-filter (lambda (node) t)
+  "Set to a function that when passed an `org-roam-node` object, returns true for nodes that you want to be included in the index."
+  :type 'function
+  :group 'org-roam-feed
+  )
+
 (defvar org-roam-feed-review-history (make-hash-table :test 'equal)
   "Hash table storing review history for nodes.")
 
 (defvar org-roam-feed-node-scores (make-hash-table :test 'equal)
   "Hash table storing computed scores for nodes.")
 
-(defvar org-roam-feed-public-index (org-roam-node-from-id "540d97ff-8185-43a5-a046-2a35eae90282"))
 
 (defun org-roam-feed-get-backlinks-properties (node)
   "Get the alist of properties for each node that links to NODE."
@@ -213,33 +223,35 @@ visit an org-roam node and look for a property. Org-roam thinks of property valu
       (dolist (node (org-roam-feed-get-page-nodes org-roam-feed-current-page))
         (org-roam-feed-insert-node node)))))
 
-(defun org-roam-feed-update-public-index ()
-  """Create a list of org-mode links corresponding to the first page of feed results, and insert it into a dedicated heading in a roam node.
+(defun org-roam-feed-update-index ()
+  """Create a list of org-mode links corresponding to the first page of feed results, and insert it into a dedicated heading in a roam node. Links to nodes are not included if `org-roam-feed-index-filter returns false when given the node ID.`
 
 TODO:
-- remove hardcoded heading title.
 - replace org-map-entries with an org-element or org-ml based operation.
 - construct the list of links with org-element instead of string formatting."""
-  (let ((link-block (mapconcat (lambda (node)
+(let* ((node-list (ntake 10 (-filter org-roam-feed-index-filter (org-roam-feed-get-page-nodes 0))))
+       (link-block (mapconcat (lambda (node)
 				 (let ((link (concat "id:" (org-roam-node-id node)))
 				       (title (org-roam-node-title node)))
 				   (format "- [[%s][%s]]\n" link title)))
-			       (org-roam-feed-get-page-nodes 0)))
+			       node-list))
 	(review-heading (concat "* To Review\n" link-block)))
     ;; This works by killing and replacing a heading in a roam node with links corresponding to the first page.
-    (save-excursion
-      (org-roam-node-visit org-roam-feed-public-index)
-      (org-map-entries (lambda ()
-			 (progn
-			   (if (string= (nth 4 (org-heading-components)) "To Review")
-			       (save-restriction
-				 (org-mark-subtree)
-				 (setq org-map-continue-from (region-beginning))
-				 (delete-region (region-beginning) (region-end))))
-			   (point-max-marker)
-			   (insert review-heading)
-			   (save-buffer)))
-		       t 'file))))
+    (if org-roam-feed-index 
+	(save-excursion
+	  (org-roam-node-visit (org-roam-node-from-id org-roam-feed-index))
+	  (org-map-entries (lambda ()
+			     (progn
+			       (if (string= (nth 4 (org-heading-components)) "To Review")
+				   (save-restriction
+				     (org-mark-subtree)
+				     (setq org-map-continue-from (region-beginning))
+				     (delete-region (region-beginning) (region-end))))
+			       (point-max-marker)
+			       (insert review-heading)
+			       (save-buffer)))
+			   t 'file))
+      (message "No index node set, skipping the creation of an index."))))
 
 
 (defun org-roam-feed-insert-node (node)
