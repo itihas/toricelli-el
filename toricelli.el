@@ -211,7 +211,13 @@
   (setq toricelli-sorted-node-list (org-roam-node-list))
   (sort toricelli-sorted-node-list (lambda (x y) (> (gethash x toricelli-node-scores) (gethash y toricelli-node-scores)))))
 
+(defvar toricelli-recent-node-list nil)
+(defun toricelli-update-recent-node-list ()
+  (setq toricelli-recent-node-list (org-roam-node-list))
+  (sort toricelli-recent-node-list (lambda (x y) (org-time> (car (gethash x toricelli-review-history)) (car (gethash y toricelli-review-history))))))
+
 (defun toricelli-update ()
+  (interactive)
     (toricelli-update-scores)
     (toricelli-update-sorted-node-list))
 
@@ -224,7 +230,7 @@
 (defun toricelli-next-page ()
   "Move to the next page of nodes."
   (interactive)
-  (let* ((total-nodes (length (org-roam-node-list)))
+  (let* ((total-nodes (length toricelli-sorted-node-list))
          (total-pages (ceiling (/ total-nodes (float toricelli-page-size))))
          (next-page (1+ toricelli-current-page)))
     (when (< next-page total-pages)
@@ -241,7 +247,6 @@
 (defun toricelli-refresh ()
   "Refresh the feed buffer."
   (interactive)
-  (toricelli-update)
   (let ((inhibit-read-only t))
     (erase-buffer)
     (magit-insert-section (feed)
@@ -263,7 +268,7 @@
 TODO:
 - replace org-map-entries with an org-element or org-ml based operation.
 - construct the list of links with org-element instead of string formatting."""
-(let* ((node-list (ntake 10 (-filter toricelli-index-filter (toricelli-get-page-nodes 0))))
+(let* ((node-list (ntake 10 (-filter toricelli-index-filter toricelli-sorted-node-list)))
        (link-block (mapconcat (lambda (node)
 				 (let ((link (concat "id:" (org-roam-node-id node)))
 				       (title (org-roam-node-title node)))
@@ -280,11 +285,41 @@ TODO:
 				   (save-restriction
 				     (org-mark-subtree)
 				     (setq org-map-continue-from (region-beginning))
-				     (delete-region (region-beginning) (region-end))))
-			       (point-max-marker)
-			       (insert review-heading)
-			       (save-buffer)))
-			   t 'file))
+				     (delete-region (region-beginning) (region-end))))))
+			   t 'file)
+	  (point-max-marker)
+	  (insert review-heading)
+	  (save-buffer))
+      (message "No index node set, skipping the creation of an index."))))
+
+(defun toricelli-update-recently-reviewed ()
+  """Create a list of org-mode links corresponding to the first page of feed results, and insert it into a dedicated heading in a roam node. Links to nodes are not included if `toricelli-index-filter returns false when given the node ID.`
+
+TODO:
+- replace org-map-entries with an org-element or org-ml based operation.
+- construct the list of links with org-element instead of string formatting."""
+(let* ((node-list (ntake 10 (-filter toricelli-index-filter toricelli-recent-node-list)))
+       (link-block (mapconcat (lambda (node)
+				 (let ((link (concat "id:" (org-roam-node-id node)))
+				       (title (org-roam-node-title node)))
+				   (format "- [[%s][%s]]\n" link title)))
+			       node-list))
+	(review-heading (concat "* Recently Reviewed\n" link-block)))
+    ;; This works by killing and replacing a heading in a roam node with links corresponding to the first page.
+    (if toricelli-index
+	(save-excursion
+	  (org-roam-node-visit (org-roam-node-from-id toricelli-index))
+	  (org-map-entries (lambda ()
+			     (progn
+			       (if (string= (nth 4 (org-heading-components)) "Recently Reviewed")
+				   (save-restriction
+				     (org-mark-subtree)
+				     (setq org-map-continue-from (region-beginning))
+				     (delete-region (region-beginning) (region-end))))))
+			   t 'file)
+	  (point-max-marker)
+	  (insert review-heading)
+	  (save-buffer))
       (message "No index node set, skipping the creation of an index."))))
 
 
@@ -328,14 +363,14 @@ TODO:
     map)
   "Keymap for `toricelli-mode'.")
 
-(define-derived-mode toricelli-mode magit-section-mode "Org-Roam Feed"
+(define-derived-mode toricelli-mode magit-section-mode "Toricelli"
   "Major mode for viewing Org-roam nodes in a feed."
   :group 'toricelli)
 
 (defun toricelli ()
   "Display Org-roam nodes in a feed buffer."
   (interactive)
-  (let ((buffer (get-buffer-create "*Org-Roam Feed*")))
+  (let ((buffer (get-buffer-create "*Toricelli*")))
     (with-current-buffer buffer
       (toricelli-mode)
       (toricelli-refresh))
