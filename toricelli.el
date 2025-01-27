@@ -214,12 +214,13 @@
 (defvar toricelli-recent-node-list nil)
 (defun toricelli-update-recent-node-list ()
   (setq toricelli-recent-node-list (org-roam-node-list))
-  (sort toricelli-recent-node-list (lambda (x y) (org-time> (car (gethash x toricelli-review-history)) (car (gethash y toricelli-review-history))))))
+  (sort toricelli-recent-node-list (lambda (x y) (org-time> (car (toricelli-get-history x)) (car (toricelli-get-history y))))))
 
 (defun toricelli-update ()
   (interactive)
     (toricelli-update-scores)
-    (toricelli-update-sorted-node-list))
+    (toricelli-update-sorted-node-list)
+    (toricelli-update-recent-node-list))
 
 (defun toricelli-get-page-nodes (page)
   "Get nodes for the specified PAGE number."
