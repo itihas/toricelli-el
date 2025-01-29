@@ -190,8 +190,13 @@
 
 (defvar toricelli-recent-node-list nil)
 (defun toricelli-update-recent-node-list ()
-  (setq toricelli-recent-node-list (org-roam-node-list))
-  (sort toricelli-recent-node-list (lambda (x y) (org-time> (car (toricelli-get-history x)) (car (toricelli-get-history y))))))
+  (setq toricelli-recent-node-list
+	(-sort (lambda (x y) (let* ((hx (safe-date-to-time (car (toricelli-get-history x))))
+				       (hy (safe-date-to-time (car (toricelli-get-history y))))
+				       (g (time-less-p hy hx)))
+				  ;; (message "%s > %s: %s" hx hy g)
+				  g))
+		  (org-roam-node-list))))
 
 (defun toricelli-update ()
   (interactive)
