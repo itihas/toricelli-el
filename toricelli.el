@@ -68,13 +68,8 @@
 	      (* (/ 1.0 (+ 1.0 (/ (float-time (time-since last-review)) 86400)))
                  (log (+ 1.0 review-count)))
             0.0))
- 	 ;; inaccurate, here so we can check the plumbing.
-	 ;; higher factor means shorter interval.
-					; so, more frequent/recent in order to decrease repetition.
-	 ;; (But this needs to be responsive to wanting to review
-	 ;; something again soon.
-	 ;; So, decent default choice but not the best one.)
-	 (srs-delay-factor (/ 1 frecency))
+	 (feed-score (toricelli-get-property-from-node node "FEED_SCORE" #'string-to-number (number-to-string frecency)))
+	 (srs-delay-factor feed-score)
 	 (srs-interval (* (* toricelli-default-interval
 			     (expt 2 (1- review-count)))
 			  (/ 1.0 (+ 0.5 srs-delay-factor))))
@@ -131,9 +126,11 @@
     (save-buffer)
     (org-mark-ring-goto)))
 
-
-(defun toricelli-get-property-from-node (node property)
-  (alist-get property (org-roam-node-properties node) nil nil 'string-equal))
+(defun toricelli-get-property-from-node (node property &optional transform default)
+  (let ((default (or default ""))
+	(value (or (alist-get property (org-roam-node-properties node) nil nil 'string-equal) default))
+	(transform (or transform #'identity)))
+    (funcall transform value)))
 
 (defun toricelli-get-history (node)
   (let ((val (gethash node toricelli-review-history)))
@@ -143,17 +140,22 @@
 	(toricelli-record-review node (org-roam-node-file-mtime node)))
       (gethash node toricelli-review-history)))))
 
-
-(defun toricelli-record-review (&optional node review-time)
+(defun toricelli-record-review (&optional grade node review-time)
   "Record a review for NODE and propagate effects through the network."
   ;; add the review time to the MTIME property in the node.
-  (interactive)
-  (let ((node (or node (org-roam-node-at-point)))
+  (interactive "N")
+  (let ((grade (cond ((not grade) 3)
+		     ((> 0 grade) 0)
+		     ((< 5 grade) 5)
+		     (t grade)))
+	(node (or node (org-roam-node-at-point)))
 	(review-time (or review-time (current-time)))
 	(timestamp (format-time-string (org-time-stamp-format t t) review-time)))
     (save-excursion
       (org-roam-node-visit node)
-      (let ((mtimes (split-string-and-unquote (or (alist-get "MTIME" (org-roam-node-properties node) nil nil 'string-equal) "") ",")))
+      (let ((feed-score (string-to-number (toricelli-get-property-from-node node "FEED_SCORE")))
+	    (mtimes (split-string-and-unquote (toricelli-get-property-from-node node "MTIME") ",")))
+	(org-set-property "FEED_SCORE" (number-to-string (* (1+ feed-score) grade))) ;; arbitrary choice of score update
 	(org-set-property "MTIME" (combine-and-quote-strings (cons timestamp mtimes) ","))
 	(puthash node (cons timestamp mtimes) toricelli-review-history)) ;; update the hash table
       (org-mark-ring-goto))))
