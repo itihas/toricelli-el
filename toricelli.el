@@ -183,29 +183,6 @@
 (defvar-local toricelli-current-page 0
   "Current page number (0-based) in the feed buffer.")
 
-
-(defun toricelli-get-nodes ()
-  "Get all nodes sorted by review priority with PageRank influence."
-  (let* ((nodes (org-roam-node-list))
-	 (_   (toricelli-update-scores nodes))
-         (nodes-with-schedule
-          (mapcar (lambda (node)
-                    (let* ((next-review (toricelli-next-review node))
-                           (score (or (toricelli-get-property-from-node node "FEED_SCORE") 0.5)))
-                      (cons node (cons next-review score))))
-                  nodes)))
-    ;; Sort by a combination of review time and score
-    (mapcar #'car
-            (sort nodes-with-schedule
-                  (lambda (a b)
-                    (let ((time-a (cadr a))
-                          (score-a (cddr a))
-                          (time-b (cadr b))
-                          (score-b (cddr b)))
-                      ;; Primary sort by time, but boost higher-scored nodes
-                      (ts< (ts-adjust 'day (round (/ -7.0 score-a)) time-a)
-                           (ts-adjust 'day (round (/ -7.0 score-b)) time-b))))))))
-
 (defvar toricelli-sorted-node-list nil)
 (defun toricelli-update-sorted-node-list ()
   (setq toricelli-sorted-node-list (org-roam-node-list))
@@ -222,53 +199,13 @@
     (toricelli-update-sorted-node-list)
     (toricelli-update-recent-node-list))
 
-(defun toricelli-get-page-nodes (page)
-  "Get nodes for the specified PAGE number."
-  (let* ((start (* page toricelli-page-size))
-         (end (min (+ start toricelli-page-size) (length toricelli-sorted-node-list))))
-    (seq-subseq toricelli-sorted-node-list start end)))
-
-(defun toricelli-next-page ()
-  "Move to the next page of nodes."
-  (interactive)
-  (let* ((total-nodes (length toricelli-sorted-node-list))
-         (total-pages (ceiling (/ total-nodes (float toricelli-page-size))))
-         (next-page (1+ toricelli-current-page)))
-    (when (< next-page total-pages)
-      (setq toricelli-current-page next-page)
-      (toricelli-refresh))))
-
-(defun toricelli-prev-page ()
-  "Move to the previous page of nodes."
-  (interactive)
-  (when (> toricelli-current-page 0)
-    (setq toricelli-current-page (1- toricelli-current-page))
-    (toricelli-refresh)))
-
-(defun toricelli-refresh ()
-  "Refresh the feed buffer."
-  (interactive)
-  (let ((inhibit-read-only t))
-    (erase-buffer)
-    (magit-insert-section (feed)
-      (let* ((total-nodes (length (org-roam-node-list)))
-             (total-pages (ceiling (/ total-nodes (float toricelli-page-size)))))
-        ;; Insert pagination info header
-        (insert (format "Page %d/%d (Total nodes: %d)\n\n"
-                       (1+ toricelli-current-page)
-                       total-pages
-                       total-nodes))
-        ;; Insert navigation help
-        (insert "Navigation: n - next page, p - previous page, g - refresh\n\n"))
-      (dolist (node (toricelli-get-page-nodes toricelli-current-page))
-        (toricelli-insert-node node)))))
-
 (defun toricelli-update-index ()
   """Create a list of org-mode links corresponding to the first page of feed results, and insert it into a dedicated heading in a roam node. Links to nodes are not included if `toricelli-index-filter returns false when given the node ID.`
 
 TODO:
 - replace org-map-entries with an org-element or org-ml based operation.
 - construct the list of links with org-element instead of string formatting."""
+(interactive)
 (let* ((node-list (ntake 10 (-filter toricelli-index-filter toricelli-sorted-node-list)))
        (link-block (mapconcat (lambda (node)
 				 (let ((link (concat "id:" (org-roam-node-id node)))
