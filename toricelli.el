@@ -57,7 +57,6 @@
 			  :and (= type "id")]
                  (org-roam-node-id node))))
 
-
 (defun toricelli-standalone-node-score (node)
   "Calculate a score for NODE-ID based only on its own properties."
   (let* ((history (toricelli-get-history node))
@@ -87,8 +86,6 @@
     (when (-any #'isnan (list frecency srs-interval standalone-score))
       (error "One of these isnan: Node %s SRS interval: %f Frecency: %f Score: %f" (org-roam-node-id node) srs-interval frecency standalone-score))
     standalone-score))
-
-
 
 (defun toricelli-pagerank-step (node-id-score-alist)
   (let* ((get-avg-backlink-score (lambda (node-id)
@@ -123,7 +120,6 @@
     (dolist (node nodes)
       (puthash node (alist-get (org-roam-node-id node) pagerank-scores nil nil #'equal) toricelli-node-scores))
     ))
-
 
 (defun toricelli-set-property (node property value)
   "Visit an org-roam node and set a property to a value."
