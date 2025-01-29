@@ -241,6 +241,7 @@ TODO:
 TODO:
 - replace org-map-entries with an org-element or org-ml based operation.
 - construct the list of links with org-element instead of string formatting."""
+(interactive)
 (let* ((node-list (ntake 10 (-filter toricelli-index-filter toricelli-recent-node-list)))
        (link-block (mapconcat (lambda (node)
 				 (let ((link (concat "id:" (org-roam-node-id node)))
@@ -265,6 +266,47 @@ TODO:
 	  (save-buffer))
       (message "No index node set, skipping the creation of an index."))))
 
+(defun toricelli-get-page-nodes (page)
+  "Get nodes for the specified PAGE number."
+  (let* ((start (* page toricelli-page-size))
+         (end (min (+ start toricelli-page-size) (length toricelli-sorted-node-list))))
+    (seq-subseq toricelli-sorted-node-list start end)))
+
+(defun toricelli-next-page ()
+  "Move to the next page of nodes."
+  (interactive)
+  (let* ((total-nodes (length toricelli-sorted-node-list))
+         (total-pages (ceiling (/ total-nodes (float toricelli-page-size))))
+         (next-page (1+ toricelli-current-page)))
+    (when (< next-page total-pages)
+      (setq toricelli-current-page next-page)
+      (toricelli-refresh))))
+
+(defun toricelli-prev-page ()
+  "Move to the previous page of nodes."
+  (interactive)
+  (when (> toricelli-current-page 0)
+    (setq toricelli-current-page (1- toricelli-current-page))
+    (toricelli-refresh)))
+
+(defun toricelli-refresh ()
+  "Refresh the feed buffer."
+  (interactive nil toricelli-mode)
+  (when (= major-mode))
+  (let ((inhibit-read-only t))
+    (erase-buffer)
+    (magit-insert-section (feed)
+      (let* ((total-nodes (length (org-roam-node-list)))
+             (total-pages (ceiling (/ total-nodes (float toricelli-page-size)))))
+        ;; Insert pagination info header
+        (insert (format "Page %d/%d (Total nodes: %d)\n\n"
+                       (1+ toricelli-current-page)
+                       total-pages
+                       total-nodes))
+        ;; Insert navigation help
+        (insert "Navigation: n - next page, p - previous page, g - refresh u - update\n\n"))
+      (dolist (node (toricelli-get-page-nodes toricelli-current-page))
+        (toricelli-insert-node node)))))
 
 (defun toricelli-insert-node (node)
   "Insert NODE into the feed buffer with magit-section formatting."
@@ -299,6 +341,7 @@ TODO:
 (defvar toricelli-mode-map
   (let ((map (make-sparse-keymap)))
     (define-key map (kbd "g") 'toricelli-refresh)
+    (define-key map (kbd "u") 'toricelli-update)
     (define-key map (kbd "RET") 'org-roam-node-visit)
     (define-key map (kbd "r") 'toricelli-record-review)
     (define-key map (kbd "n") 'toricelli-next-page)
