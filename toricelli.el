@@ -69,7 +69,7 @@
                  (log (+ 1.0 review-count)))
             0.0))
 	 (feed-score (toricelli-get-property-from-node node "FEED_SCORE" #'string-to-number (number-to-string frecency)))
-	 (srs-delay-factor feed-score)
+	 (srs-delay-factor (/ 1 (1+ feed-score)))
 	 (srs-interval (* (* toricelli-default-interval
 			     (expt 2 (1- review-count)))
 			  (/ 1.0 (+ 0.5 srs-delay-factor))))
@@ -126,6 +126,8 @@
     (save-buffer)
     (org-mark-ring-goto)))
 
+;; TODO change this to take a target type
+;; TODO change the default value to be in the target type, not the source type.
 (defun toricelli-get-property-from-node (node property &optional transform default)
   (let ((default (or default ""))
 	(value (or (alist-get property (org-roam-node-properties node) nil nil 'string-equal) default))
@@ -134,27 +136,30 @@
 
 (defun toricelli-get-history (node)
   (let ((val (gethash node toricelli-review-history)))
-  (if val val
-    (let ((fileval (toricelli-get-property-from-node node "MTIME")))
-      (if fileval (progn (puthash node (split-string-and-unquote fileval ",") toricelli-review-history))
-	(toricelli-record-review node (org-roam-node-file-mtime node)))
-      (gethash node toricelli-review-history)))))
+    (if val val
+      (let ((val (toricelli-get-property-from-node node "MTIME"
+						   (lambda (n) (split-string-and-unquote n ","))
+						   (toricelli-get-property-from-node node "CREATED" nil
+										     (format-time-string (org-time-stamp-format t t)
+													 (org-roam-node-file-mtime node))))))
+	(puthash node val toricelli-review-history)
+	val))))
 
 (defun toricelli-record-review (&optional grade node review-time)
   "Record a review for NODE and propagate effects through the network."
   ;; add the review time to the MTIME property in the node.
-  (interactive "N")
-  (let ((grade (cond ((not grade) 3)
-		     ((> 0 grade) 0)
-		     ((< 5 grade) 5)
-		     (t grade)))
+  (interactive "NGrade: ")
+  (let ((grade (float (cond ((not grade) 3)
+		      ((> 0 grade) 0)
+		      ((< 5 grade) 5)
+		      (t grade))))
 	(node (or node (org-roam-node-at-point)))
 	(review-time (or review-time (current-time)))
 	(timestamp (format-time-string (org-time-stamp-format t t) review-time)))
     (save-excursion
       (org-roam-node-visit node)
-      (let ((feed-score (string-to-number (toricelli-get-property-from-node node "FEED_SCORE")))
-	    (mtimes (split-string-and-unquote (toricelli-get-property-from-node node "MTIME") ",")))
+      (let ((feed-score (toricelli-get-property-from-node node "FEED_SCORE" #'string-to-number "0"))
+	    (mtimes (toricelli-get-history node)))
 	(org-set-property "FEED_SCORE" (number-to-string (* (1+ feed-score) grade))) ;; arbitrary choice of score update
 	(org-set-property "MTIME" (combine-and-quote-strings (cons timestamp mtimes) ","))
 	(puthash node (cons timestamp mtimes) toricelli-review-history)) ;; update the hash table
@@ -264,11 +269,11 @@ TODO:
 	  (save-buffer))
       (message "No index node set, skipping the creation of an index."))))
 
-(defun toricelli-get-page-nodes (page)
+(defun toricelli-get-page-nodes (page node-list)
   "Get nodes for the specified PAGE number."
   (let* ((start (* page toricelli-page-size))
-         (end (min (+ start toricelli-page-size) (length toricelli-sorted-node-list))))
-    (seq-subseq toricelli-sorted-node-list start end)))
+         (end (min (+ start toricelli-page-size) (length node-list))))
+    (seq-subseq node-list start end)))
 
 (defun toricelli-next-page ()
   "Move to the next page of nodes."
@@ -294,16 +299,29 @@ TODO:
   (let ((inhibit-read-only t))
     (erase-buffer)
     (magit-insert-section (feed)
-      (let* ((total-nodes (length (org-roam-node-list)))
+      (let* ((total-nodes (length toricelli-sorted-node-list))
              (total-pages (ceiling (/ total-nodes (float toricelli-page-size)))))
         ;; Insert pagination info header
-        (insert (format "Page %d/%d (Total nodes: %d)\n\n"
+        (insert (format "To Review\nPage %d/%d (Total nodes: %d)\n\n"
                        (1+ toricelli-current-page)
                        total-pages
                        total-nodes))
         ;; Insert navigation help
         (insert "Navigation: n - next page, p - previous page, g - refresh u - update\n\n"))
-      (dolist (node (toricelli-get-page-nodes toricelli-current-page))
+      (dolist (node (toricelli-get-page-nodes toricelli-current-page toricelli-sorted-node-list))
+        (toricelli-insert-node node)))
+    (insert "\n\n\n")
+    (magit-insert-section (feed)
+      (let* ((total-nodes (length toricelli-recent-node-list))
+             (total-pages (ceiling (/ total-nodes (float toricelli-page-size)))))
+        ;; Insert pagination info header
+        (insert (format "Recently Reviewed\nPage %d/%d (Total nodes: %d)\n\n"
+                       (1+ toricelli-current-page)
+                       total-pages
+                       total-nodes))
+        ;; Insert navigation help
+        (insert "Navigation: n - next page, p - previous page, g - refresh u - update\n\n"))
+      (dolist (node (toricelli-get-page-nodes toricelli-current-page toricelli-recent-node-list))
         (toricelli-insert-node node)))))
 
 (defun toricelli-insert-node (node)
@@ -316,6 +334,7 @@ TODO:
                 (org-roam-node-title node)
                 score
                 (length history)))
+      t
       (oset section node node)
       (when history
         (insert (format "Last reviewed: %s\n"
