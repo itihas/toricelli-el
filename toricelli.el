@@ -68,7 +68,7 @@
 	      (* (/ 1.0 (+ 1.0 (/ (float-time (time-since last-review)) 86400)))
                  (log (+ 1.0 review-count)))
             0.0))
-	 (feed-score (toricelli-get-property-from-node node "FEED_SCORE" #'string-to-number (number-to-string frecency)))
+	 (feed-score (toricelli-get-property-from-node node "REVIEW_SCORE" #'string-to-number (number-to-string frecency)))
 	 (srs-delay-factor (/ 1 (1+ feed-score)))
 	 (srs-interval (* (* toricelli-default-interval
 			     (expt 2 (1- review-count)))
@@ -120,7 +120,7 @@
   "Visit an org-roam node and set a property to a value."
   (save-excursion
     (org-roam-node-visit node)
-					;org-roam wants properties to be sets. We use org-mode's org-set-property to avoid this behaviour.
+					; org-roam wants properties to be sets. We use org-mode's org-set-property to avoid this behaviour.
 					; TODO attempt to restore honor to this floating point - see what it takes to make the conversion lossless.
     (org-set-property property (number-to-string value))
     (save-buffer)
@@ -158,9 +158,9 @@
 	(timestamp (format-time-string (org-time-stamp-format t t) review-time)))
     (save-excursion
       (org-roam-node-visit node)
-      (let ((feed-score (toricelli-get-property-from-node node "FEED_SCORE" #'string-to-number "0"))
+      (let ((feed-score (toricelli-get-property-from-node node "REVIEW_SCORE" #'string-to-number "0"))
 	    (mtimes (toricelli-get-history node)))
-	(org-set-property "FEED_SCORE" (number-to-string (* (1+ feed-score) grade))) ;; arbitrary choice of score update
+	(org-set-property "REVIEW_SCORE" (number-to-string (* (1+ feed-score) grade))) ;; arbitrary choice of score update
 	(org-set-property "MTIME" (combine-and-quote-strings (cons timestamp mtimes) ","))
 	(puthash node (cons timestamp mtimes) toricelli-review-history)) ;; update the hash table
       (org-mark-ring-goto))))
@@ -207,14 +207,14 @@
     (toricelli-update-sorted-node-list)
     (toricelli-update-recent-node-list))
 
-(defun toricelli-update-index ()
+(defun toricelli-update-index (&optional n)
   """Create a list of org-mode links corresponding to the first page of feed results, and insert it into a dedicated heading in a roam node. Links to nodes are not included if `toricelli-index-filter returns false when given the node ID.`
 
 TODO:
 - replace org-map-entries with an org-element or org-ml based operation.
 - construct the list of links with org-element instead of string formatting."""
-(interactive)
-(let* ((node-list (ntake 10 (-filter toricelli-index-filter toricelli-sorted-node-list)))
+(interactive "N")
+(let* ((node-list (ntake (or n 10) (-filter toricelli-index-filter toricelli-sorted-node-list)))
        (link-block (mapconcat (lambda (node)
 				 (let ((link (concat "id:" (org-roam-node-id node)))
 				       (title (org-roam-node-title node)))
@@ -238,14 +238,14 @@ TODO:
 	  (save-buffer))
       (message "No index node set, skipping the creation of an index."))))
 
-(defun toricelli-update-recently-reviewed ()
+(defun toricelli-update-recently-reviewed (&optional n)
   """Create a list of org-mode links corresponding to the first page of feed results, and insert it into a dedicated heading in a roam node. Links to nodes are not included if `toricelli-index-filter returns false when given the node ID.`
 
 TODO:
 - replace org-map-entries with an org-element or org-ml based operation.
 - construct the list of links with org-element instead of string formatting."""
-(interactive)
-(let* ((node-list (ntake 10 (-filter toricelli-index-filter toricelli-recent-node-list)))
+(interactive "N")
+(let* ((node-list (ntake (or n 10) (-filter toricelli-index-filter toricelli-recent-node-list)))
        (link-block (mapconcat (lambda (node)
 				 (let ((link (concat "id:" (org-roam-node-id node)))
 				       (title (org-roam-node-title node)))
