@@ -21,6 +21,16 @@
   :type 'string
   :group 'toricelli)
 
+(defcustom toricelli-reviewed-feed nil
+  "ID of the roam node within which to build an index."
+  :type 'string
+  :group 'toricelli)
+
+(defcustom toricelli-featured-feed nil
+  "ID of the roam node within which to build an index."
+  :type 'string
+  :group 'toricelli)
+
 (defcustom toricelli-index-filter (lambda (node) t)
   "Set to a function that when passed an `org-roam-node` object, returns true for nodes that you want to be included in the index."
   :type 'function
@@ -158,9 +168,11 @@
 	(timestamp (format-time-string (org-time-stamp-format t t) review-time)))
     (save-excursion
       (org-roam-node-visit node)
-      (let ((feed-score (toricelli-get-property-from-node node "REVIEW_SCORE" #'string-to-number "0"))
-	    (mtimes (toricelli-get-history node)))
-	(org-set-property "REVIEW_SCORE" (number-to-string (* (1+ feed-score) grade))) ;; arbitrary choice of score update
+      (let* ((current-score (toricelli-get-property-from-node node "REVIEW_SCORE" #'string-to-number "0"))
+	    (new-score (number-to-string (* (1+ current-score) grade)))(mtimes (toricelli-get-history node)))
+	(org-set-property "REVIEW_SCORE" new-score) ;; arbitrary choice of score update
+	(if (>= grade 4)
+	    (org-set-property "FEATURED_REVIEW" timestamp))
 	(org-set-property "MTIME" (combine-and-quote-strings (cons timestamp mtimes) ","))
 	(puthash node (cons timestamp mtimes) toricelli-review-history)) ;; update the hash table
       (org-mark-ring-goto))))
@@ -201,11 +213,28 @@
 				  g))
 		  (org-roam-node-list))))
 
+(defun toricelli-get-featured-date (node)
+  (toricelli-get-property-from-node
+   node "FEATURED_REVIEW"
+   #'identity
+   (toricelli-get-property-from-node node "CREATED")))
+
+(defvar toricelli-featured-node-list nil)
+(defun toricelli-update-featured-node-list ()
+  (setq toricelli-featured-node-list
+	(-sort (lambda (x y) (let* ((hx (safe-date-to-time (toricelli-get-featured-date x)))
+				    (hy (safe-date-to-time (toricelli-get-featured-date y)))
+				    (g (time-less-p hy hx)))
+			       ;; (message "%s > %s: %s" hx hy g)
+			       g))
+	       (org-roam-node-list))))
+
 (defun toricelli-update ()
   (interactive)
     (toricelli-update-scores)
     (toricelli-update-sorted-node-list)
-    (toricelli-update-recent-node-list))
+    (toricelli-update-recent-node-list)
+    (toricelli-update-featured-node-list))
 
 (defun toricelli-update-index (&optional n)
   """Create a list of org-mode links corresponding to the first page of feed results, and insert it into a dedicated heading in a roam node. Links to nodes are not included if `toricelli-index-filter returns false when given the node ID.`
@@ -238,6 +267,38 @@ TODO:
 	  (save-buffer))
       (message "No index node set, skipping the creation of an index."))))
 
+(defun toricelli-update-reviewed-feed ()
+  (interactive)
+  (let* ((node-list (ntake 100 (-filter toricelli-index-filter toricelli-recent-node-list)))
+	 (link-heading (mapconcat (lambda (node)
+				    (let ((link (concat (file-name-base (org-roam-node-file node)) ".html"))
+					  (pubdate (car (toricelli-get-history  node)))
+					  (title (org-roam-node-title node)))
+				      (format "* %s\n:PROPERTIES:\n:PUBDATE: %s\n:RSS_PERMALINK: %s\n:END:\n\n" title pubdate link)))
+				  node-list))
+	 (feed-page (concat "#+title: itihas.recently.reviewed\n#+author:itihas \n" link-heading)))
+    (message feed-page)
+    (if toricelli-reviewed-feed
+	(with-temp-file toricelli-reviewed-feed
+	  (insert feed-page))
+      (message "No feed page set, skipping the creation of one."))))
+
+(defun toricelli-update-featured-feed ()
+  (interactive)
+  (let* ((node-list (ntake 100 (-filter toricelli-index-filter toricelli-featured-node-list)))
+	 (link-heading (mapconcat (lambda (node)
+				    (let ((link (concat (file-name-base (org-roam-node-file node)) ".html"))
+					  (pubdate (toricelli-get-featured-date node))
+					  (title (org-roam-node-title node)))
+				      (format "* %s\n:PROPERTIES:\n:PUBDATE: %s\n:RSS_PERMALINK: %s\n:END:\n\n" title pubdate link)))
+				  node-list))
+	 (feed-page (concat "#+title: itihas.featured\n#+author:itihas \n" link-heading)))
+    (message feed-page)
+    (if toricelli-featured-feed
+	(with-temp-file toricelli-featured-feed
+	  (insert feed-page))
+      (message "No feed page set, skipping the creation of one."))))
+
 (defun toricelli-update-recently-reviewed (&optional n)
   """Create a list of org-mode links corresponding to the first page of feed results, and insert it into a dedicated heading in a roam node. Links to nodes are not included if `toricelli-index-filter returns false when given the node ID.`
 
@@ -251,7 +312,7 @@ TODO:
 				       (title (org-roam-node-title node)))
 				   (format "- [[%s][%s]]\n" link title)))
 			       node-list))
-	(review-heading (concat "* Recently Reviewed\n" link-block)))
+	(review-heading (concat "* Recently Reviewed ([[file:reviewed-feed.xml][rss]])\n" link-block)))
     ;; This works by killing and replacing a heading in a roam node with links corresponding to the first page.
     (if toricelli-index
 	(save-excursion
@@ -259,6 +320,45 @@ TODO:
 	  (org-map-entries (lambda ()
 			     (progn
 			       (if (string= (nth 4 (org-heading-components)) "Recently Reviewed")
+				   (save-restriction
+				     (org-mark-subtree)
+				     (setq org-map-continue-from (region-beginning))
+				     (delete-region (region-beginning) (region-end))))))
+			   t 'file)
+	  (point-max-marker)
+	  (insert review-heading)
+	  (save-buffer))
+      (message "No index node set, skipping the creation of an index."))))
+
+
+(defun toricelli-publish-updates ()
+  (toricelli-update-featured-feed)
+  (toricelli-update-reviewed-feed)
+  (toricelli-update-index)
+  (toricelli-update-featured)
+  (toricelli-update-recently-reviewed))
+
+(defun toricelli-update-featured (&optional n)
+  """Create a list of org-mode links corresponding to the first page of feed results, and insert it into a dedicated heading in a roam node. Links to nodes are not included if `toricelli-index-filter returns false when given the node ID.`
+
+TODO:
+- replace org-map-entries with an org-element or org-ml based operation.
+- construct the list of links with org-element instead of string formatting."""
+(interactive "N")
+(let* ((node-list (ntake (or n 10) (-filter toricelli-index-filter toricelli-featured-node-list)))
+       (link-block (mapconcat (lambda (node)
+				 (let ((link (concat "id:" (org-roam-node-id node)))
+				       (title (org-roam-node-title node)))
+				   (format "- [[%s][%s]]\n" link title)))
+			       node-list))
+	(review-heading (concat "* Featured ([[file:featured.xml][rss]])\n" link-block)))
+    ;; This works by killing and replacing a heading in a roam node with links corresponding to the first page.
+    (if toricelli-index
+	(save-excursion
+	  (org-roam-node-visit (org-roam-node-from-id toricelli-index))
+	  (org-map-entries (lambda ()
+			     (progn
+			       (if (string= (nth 4 (org-heading-components)) "Featured")
 				   (save-restriction
 				     (org-mark-subtree)
 				     (setq org-map-continue-from (region-beginning))
