@@ -366,43 +366,44 @@ Nodes for which `toricelli-index-filter' returns nil are skipped."
   (when (= major-mode))
   (let ((inhibit-read-only t))
     (erase-buffer)
-    (magit-insert-section (feed)
-      (let* ((total-nodes (length toricelli-sorted-node-list))
-             (total-pages (ceiling (/ total-nodes (float toricelli-page-size)))))
-        ;; Insert pagination info header
-        (insert (format "To Review\nPage %d/%d (Total nodes: %d)\n\n"
-                       (1+ toricelli-current-page)
-                       total-pages
-                       total-nodes))
-        ;; Insert navigation help
-        (insert "Navigation: n - next page, p - previous page, g - refresh u - update\n\n"))
-      (dolist (node (toricelli-get-page-nodes toricelli-current-page toricelli-sorted-node-list))
-        (toricelli-insert-node node)))
-    (insert "\n\n\n")
-    (magit-insert-section (feed)
-      (let* ((total-nodes (length toricelli-recent-node-list))
-             (total-pages (ceiling (/ total-nodes (float toricelli-page-size)))))
-        ;; Insert pagination info header
-        (insert (format "Recently Reviewed\nPage %d/%d (Total nodes: %d)\n\n"
-                       (1+ toricelli-current-page)
-                       total-pages
-                       total-nodes))
-        ;; Insert navigation help
-        (insert "Navigation: n - next page, p - previous page, g - refresh u - update\n\n"))
-      (dolist (node (toricelli-get-page-nodes toricelli-current-page toricelli-recent-node-list))
-        (toricelli-insert-node node)))))
+    (magit-insert-section (toricelli-root)
+			  (magit-insert-section (feed 'review)
+						(let* ((total-nodes (length toricelli-sorted-node-list))
+						       (total-pages (ceiling (/ total-nodes (float toricelli-page-size)))))
+						  ;; Insert pagination info header
+						  (insert (format "To Review\nPage %d/%d (Total nodes: %d)\n\n"
+								  (1+ toricelli-current-page)
+								  total-pages
+								  total-nodes))
+						  ;; Insert navigation help
+						  (insert "Navigation: n - next page, p - previous page, g - refresh u - update\n\n"))
+						(dolist (node (toricelli-get-page-nodes toricelli-current-page toricelli-sorted-node-list))
+						  (toricelli-insert-node node)))
+			  (insert "\n\n\n")
+			  (magit-insert-section (feed 'recent)
+						(let* ((total-nodes (length toricelli-recent-node-list))
+						       (total-pages (ceiling (/ total-nodes (float toricelli-page-size)))))
+						  ;; Insert pagination info header
+						  (insert (format "Recently Reviewed\nPage %d/%d (Total nodes: %d)\n\n"
+								  (1+ toricelli-current-page)
+								  total-pages
+								  total-nodes))
+						  ;; Insert navigation help
+						  (insert "Navigation: n - next page, p - previous page, g - refresh u - update\n\n"))
+						(dolist (node (toricelli-get-page-nodes toricelli-current-page toricelli-recent-node-list))
+						  (toricelli-insert-node node))))
+    (magit-section-show magit-root-section)))
 
 (defun toricelli-insert-node (node)
   "Insert NODE into the feed buffer with magit-section formatting."
   (let* ((score (gethash node toricelli-node-scores))
          (history (toricelli-get-history node)))
-    (magit-insert-section section (org-roam-node-section)
+    (magit-insert-section section (org-roam-node-section (org-roam-node-id node) t)
       (magit-insert-heading
         (format "%s (Score: %s, Reviews: %d)"
                 (org-roam-node-title node)
                 score
                 (length history)))
-      t
       (oset section node node)
       (when history
         (insert (format "Last reviewed: %s\n"
