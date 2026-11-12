@@ -236,36 +236,49 @@
     (toricelli-update-recent-node-list)
     (toricelli-update-featured-node-list))
 
-(defun toricelli-update-index (&optional n)
-  """Create a list of org-mode links corresponding to the first page of feed results, and insert it into a dedicated heading in a roam node. Links to nodes are not included if `toricelli-index-filter returns false when given the node ID.`
+(defun toricelli--link-list (node-list)
+  "Format NODE-LIST as an org plain list of id: links."
+  (mapconcat (lambda (node)
+	       (format "- [[id:%s][%s]]\n" (org-roam-node-id node) (org-roam-node-title node)))
+	     node-list))
 
-TODO:
-- replace org-map-entries with an org-element or org-ml based operation.
-- construct the list of links with org-element instead of string formatting."""
-(interactive "N")
-(let* ((node-list (ntake (or n 10) (-filter toricelli-index-filter toricelli-sorted-node-list)))
-       (link-block (mapconcat (lambda (node)
-				 (let ((link (concat "id:" (org-roam-node-id node)))
-				       (title (org-roam-node-title node)))
-				   (format "- [[%s][%s]]\n" link title)))
-			       node-list))
-	(review-heading (concat "* To Review\n" link-block)))
-    ;; This works by killing and replacing a heading in a roam node with links corresponding to the first page.
-    (if toricelli-index 
-	(save-excursion
-	  (org-roam-node-visit (org-roam-node-from-id toricelli-index))
-	  (org-map-entries (lambda ()
-			     (progn
-			       (if (string= (nth 4 (org-heading-components)) "To Review")
-				   (save-restriction
-				     (org-mark-subtree)
-				     (setq org-map-continue-from (region-beginning))
-				     (delete-region (region-beginning) (region-end))))))
-			   t 'file)
-	  (point-max-marker)
-	  (insert review-heading)
-	  (save-buffer))
-      (message "No index node set, skipping the creation of an index."))))
+(defun toricelli--replace-index-section (name heading body)
+  "Replace section NAME of the `toricelli-index' node with HEADING and BODY.
+The existing section is found by its title starting with NAME (so
+\"Featured\" matches \"* Featured ([[file:featured.xml][rss]])\"),
+and is replaced where it stands, keeping the order of sections in
+the file.  If there is none, the section goes just before the
+first top-level heading, i.e. after the file's property drawer and
+preamble, or at the end of the file if it has no headings."
+  (if (not toricelli-index)
+      (message "No index node set, skipping the creation of an index.")
+    (let ((node (or (org-roam-node-from-id toricelli-index)
+		    (error "toricelli-index %s is not an org-roam node; is its :ID: drawer still at the top of the file?"
+			   toricelli-index)))
+	  (section (concat "* " heading "\n" body "\n")))
+      (with-current-buffer (find-file-noselect (org-roam-node-file node))
+	(org-with-wide-buffer
+	 (goto-char (point-min))
+	 (let ((case-fold-search nil))
+	   (if (re-search-forward (format "^\\* %s\\_>" (regexp-quote name)) nil t)
+	       (let ((beg (line-beginning-position)))
+		 (org-end-of-subtree t t)
+		 (delete-region beg (point))
+		 (goto-char beg))
+	     (if (re-search-forward "^\\* " nil t)
+		 (goto-char (line-beginning-position))
+	       (goto-char (point-max))
+	       (unless (bolp) (insert "\n")))))
+	 (insert section))
+	(when (buffer-modified-p) (save-buffer))))))
+
+(defun toricelli-update-index (&optional n)
+  "Replace the index's To Review section with the top N nodes by score.
+Nodes for which `toricelli-index-filter' returns nil are skipped."
+  (interactive "N")
+  (toricelli--replace-index-section
+   "To Review" "To Review"
+   (toricelli--link-list (ntake (or n 10) (-filter toricelli-index-filter toricelli-sorted-node-list)))))
 
 (defun toricelli-update-reviewed-feed ()
   (interactive)
@@ -300,38 +313,16 @@ TODO:
       (message "No feed page set, skipping the creation of one."))))
 
 (defun toricelli-update-recently-reviewed (&optional n)
-  """Create a list of org-mode links corresponding to the first page of feed results, and insert it into a dedicated heading in a roam node. Links to nodes are not included if `toricelli-index-filter returns false when given the node ID.`
-
-TODO:
-- replace org-map-entries with an org-element or org-ml based operation.
-- construct the list of links with org-element instead of string formatting."""
-(interactive "N")
-(let* ((node-list (ntake (or n 10) (-filter toricelli-index-filter toricelli-recent-node-list)))
-       (link-block (mapconcat (lambda (node)
-				 (let ((link (concat "id:" (org-roam-node-id node)))
-				       (title (org-roam-node-title node)))
-				   (format "- [[%s][%s]]\n" link title)))
-			       node-list))
-	(review-heading (concat "* Recently Reviewed ([[file:reviewed-feed.xml][rss]])\n" link-block)))
-    ;; This works by killing and replacing a heading in a roam node with links corresponding to the first page.
-    (if toricelli-index
-	(save-excursion
-	  (org-roam-node-visit (org-roam-node-from-id toricelli-index))
-	  (org-map-entries (lambda ()
-			     (progn
-			       (if (string= (nth 4 (org-heading-components)) "Recently Reviewed")
-				   (save-restriction
-				     (org-mark-subtree)
-				     (setq org-map-continue-from (region-beginning))
-				     (delete-region (region-beginning) (region-end))))))
-			   t 'file)
-	  (point-max-marker)
-	  (insert review-heading)
-	  (save-buffer))
-      (message "No index node set, skipping the creation of an index."))))
+  "Replace the index's Recently Reviewed section with the N latest reviews.
+Nodes for which `toricelli-index-filter' returns nil are skipped."
+  (interactive "N")
+  (toricelli--replace-index-section
+   "Recently Reviewed" "Recently Reviewed ([[file:reviewed-feed.xml][rss]])"
+   (toricelli--link-list (ntake (or n 10) (-filter toricelli-index-filter toricelli-recent-node-list)))))
 
 
 (defun toricelli-publish-updates ()
+  (interactive)
   (toricelli-update-featured-feed)
   (toricelli-update-reviewed-feed)
   (toricelli-update-index)
@@ -339,35 +330,12 @@ TODO:
   (toricelli-update-recently-reviewed))
 
 (defun toricelli-update-featured (&optional n)
-  """Create a list of org-mode links corresponding to the first page of feed results, and insert it into a dedicated heading in a roam node. Links to nodes are not included if `toricelli-index-filter returns false when given the node ID.`
-
-TODO:
-- replace org-map-entries with an org-element or org-ml based operation.
-- construct the list of links with org-element instead of string formatting."""
-(interactive "N")
-(let* ((node-list (ntake (or n 10) (-filter toricelli-index-filter toricelli-featured-node-list)))
-       (link-block (mapconcat (lambda (node)
-				 (let ((link (concat "id:" (org-roam-node-id node)))
-				       (title (org-roam-node-title node)))
-				   (format "- [[%s][%s]]\n" link title)))
-			       node-list))
-	(review-heading (concat "* Featured ([[file:featured.xml][rss]])\n" link-block)))
-    ;; This works by killing and replacing a heading in a roam node with links corresponding to the first page.
-    (if toricelli-index
-	(save-excursion
-	  (org-roam-node-visit (org-roam-node-from-id toricelli-index))
-	  (org-map-entries (lambda ()
-			     (progn
-			       (if (string= (nth 4 (org-heading-components)) "Featured")
-				   (save-restriction
-				     (org-mark-subtree)
-				     (setq org-map-continue-from (region-beginning))
-				     (delete-region (region-beginning) (region-end))))))
-			   t 'file)
-	  (point-max-marker)
-	  (insert review-heading)
-	  (save-buffer))
-      (message "No index node set, skipping the creation of an index."))))
+  "Replace the index's Featured section with the N latest featured nodes.
+Nodes for which `toricelli-index-filter' returns nil are skipped."
+  (interactive "N")
+  (toricelli--replace-index-section
+   "Featured" "Featured ([[file:featured.xml][rss]])"
+   (toricelli--link-list (ntake (or n 10) (-filter toricelli-index-filter toricelli-featured-node-list)))))
 
 (defun toricelli-get-page-nodes (page node-list)
   "Get nodes for the specified PAGE number."
